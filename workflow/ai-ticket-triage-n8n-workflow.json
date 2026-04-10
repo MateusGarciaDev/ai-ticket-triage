@@ -1,0 +1,745 @@
+{
+  "name": "ai-ticket-triage",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ticket-triage",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        368
+      ],
+      "id": "aca96b67-0fa3-4234-b8b3-b3440d2c0304",
+      "name": "Webhook",
+      "webhookId": "d6b017b0-c3a4-43d7-bc0f-584414b91c73"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\n// check required fields\nif (!body.name || !body.email || !body.message) {\n  throw new Error('GUARDRAIL_INPUT: missing required fields (name, email, message)');\n}\n\n// check message length\nif (body.message.trim().length < 10) {\n  throw new Error('GUARDRAIL_INPUT: message too short (minimum 10 characters)');\n}\n\n// check prompt injection\nconst injectionPatterns = [\n  /ignore your instructions/i,\n  /ignore previous instructions/i,\n  /you are now/i,\n  /forget your/i,\n  /act as/i,\n  /jailbreak/i\n];\n\nconst hasInjection = injectionPatterns.some(pattern => pattern.test(body.message));\nif (hasInjection) {\n  throw new Error('GUARDRAIL_INPUT: prompt injection attempt detected');\n}\n\nreturn {\n  json: {\n    name: body.name,\n    email: body.email,\n    message: body.message.trim()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        368
+      ],
+      "id": "6c0cd169-befb-47e0-9639-c73a87901bba",
+      "name": "Input Guardrail",
+      "retryOnFail": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices[0].message.content;\n\n// check if response is valid JSON\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error('GUARDRAIL_OUTPUT: Groq response is not valid JSON');\n}\n\n// check valid values\nconst validUrgency = ['high', 'medium', 'low'];\nconst validCategory = ['billing', 'technical', 'account', 'spam', 'other'];\n\nif (!validUrgency.includes(parsed.urgency)) {\n  throw new Error(`GUARDRAIL_OUTPUT: invalid urgency value \"${parsed.urgency}\"`);\n}\n\nif (!validCategory.includes(parsed.category)) {\n  throw new Error(`GUARDRAIL_OUTPUT: invalid category value \"${parsed.category}\"`);\n}\n\nif (typeof parsed.confidence !== 'number' || parsed.confidence < 0 || parsed.confidence > 1) {\n  throw new Error(`GUARDRAIL_OUTPUT: invalid confidence value \"${parsed.confidence}\"`);\n}\n\n// flag low confidence\nconst lowConfidence = parsed.confidence < 0.6;\n\nreturn {\n  json: {\n    urgency: parsed.urgency,\n    category: parsed.category,\n    confidence: parsed.confidence,\n    reasoning: parsed.reasoning,\n    low_confidence_flag: lowConfidence\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        192
+      ],
+      "id": "f621f1f9-19ec-4b83-8cd5-026f7281e98e",
+      "name": "Output Guardrail",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "c6f03e10-9b32-44ae-86d4-ac7b7b2c8caa",
+                    "leftValue": "={{ $json.ai_category }}",
+                    "rightValue": "spam",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "spam"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.ai_urgency }}",
+                    "rightValue": "high",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "571a9d79-e013-40da-8945-fb5c2e227729"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "high_urgency"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "bd726601-a72a-47b9-ac05-b6b0a9363f0e",
+                    "leftValue": "={{ $json.ai_urgency }}",
+                    "rightValue": "high",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEquals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "med_low_urgency"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1120,
+        -80
+      ],
+      "id": "8f91f825-3635-46ba-b40f-6f7773a608b4",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1I0HQjjzig5kWU5j1WxdyfY8q73I1r9Vot4490H22nB4",
+          "mode": "list",
+          "cachedResultName": "ai-ticket-triage-eval",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1I0HQjjzig5kWU5j1WxdyfY8q73I1r9Vot4490H22nB4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "eval_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1I0HQjjzig5kWU5j1WxdyfY8q73I1r9Vot4490H22nB4/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ai_urgency": "={{ $json.urgency }}",
+            "timestamp": "={{ new Date().toISOString() }}",
+            "ticket_id": "={{ Date.now() }}",
+            "message_preview": "={{ $('Input Guardrail').item.json.message.substring(0, 100) }}",
+            "ai_category": "={{ $json.category }}",
+            "confidence": "={{ $json.confidence }}",
+            "reasoning": "={{ $json.reasoning }}",
+            "low_confidence_flag": "={{ $json.low_confidence_flag }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ticket_id",
+              "displayName": "ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message_preview",
+              "displayName": "message_preview",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_urgency",
+              "displayName": "ai_urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_category",
+              "displayName": "ai_category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reasoning",
+              "displayName": "reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "low_confidence_flag",
+              "displayName": "low_confidence_flag",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "human_label_urgency",
+              "displayName": "human_label_urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "human_label_category",
+              "displayName": "human_label_category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        896,
+        128
+      ],
+      "id": "16d0bda2-98e7-416b-b0c4-e81482413995",
+      "name": "Eval Log",
+      "credentials": {
+        "googleApi": {
+          "id": "3dJ6D87qLXCvoHhJ",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1I0HQjjzig5kWU5j1WxdyfY8q73I1r9Vot4490H22nB4",
+          "mode": "list",
+          "cachedResultName": "ai-ticket-triage-eval",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1I0HQjjzig5kWU5j1WxdyfY8q73I1r9Vot4490H22nB4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1779630801,
+          "mode": "list",
+          "cachedResultName": "ticket_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1I0HQjjzig5kWU5j1WxdyfY8q73I1r9Vot4490H22nB4/edit#gid=1779630801"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ai_urgency": "={{ $json.ai_urgency }}",
+            "timestamp": "={{ new Date().toISOString() }}",
+            "ticket_id": "={{ $('Eval Log').item.json.ticket_id }}",
+            "ai_category": "={{ $json.ai_category }}",
+            "confidence": "={{ $json.confidence }}",
+            "name": "={{ $('Input Guardrail').item.json.name }}",
+            "email": "={{ $('Input Guardrail').item.json.email }}",
+            "message": "={{ $('Input Guardrail').item.json.message }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ticket_id",
+              "displayName": "ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ai_urgency",
+              "displayName": "ai_urgency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_category",
+              "displayName": "ai_category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1344,
+        144
+      ],
+      "id": "b80a9fca-4c6a-4b5c-b73e-ea3c83dce13c",
+      "name": "Ticket Log",
+      "credentials": {
+        "googleApi": {
+          "id": "3dJ6D87qLXCvoHhJ",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.3-70b-versatile\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a support ticket classifier. Classify the ticket and return ONLY a valid JSON object with no extra text, no markdown, no code blocks. The JSON must follow this exact schema: {\\\"urgency\\\": \\\"high\\\" | \\\"medium\\\" | \\\"low\\\", \\\"category\\\": \\\"billing\\\" | \\\"technical\\\" | \\\"account\\\" | \\\"spam\\\" | \\\"other\\\", \\\"confidence\\\": 0.0 to 1.0, \\\"reasoning\\\": \\\"brief explanation\\\"}. Valid urgency values: high, medium, low. Valid category values: billing, technical, account, spam, other. Do not invent new values.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"={{ $json.message }}\"\n    }\n  ],\n  \"temperature\": 0.1\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        448,
+        272
+      ],
+      "id": "ef77838e-3c31-4c00-ad4e-1e318de1759e",
+      "name": "Classify Ticket",
+      "credentials": {
+        "groqApi": {
+          "id": "0LajpScz6es0igMq",
+          "name": "Groq API"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#alerts",
+          "mode": "name"
+        },
+        "text": "=🚨 *High Urgency Ticket*\n*Category:* {{ $json.category }}\n*Confidence:* {{ $json.confidence }}\n*Reasoning:* {{ $json.reasoning }}\n*From:* {{ $('Input Guardrail').item.json.name }} ({{ $('Input Guardrail').item.json.email }})\n*Message:* {{ $('Input Guardrail').item.json.message }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1344,
+        -48
+      ],
+      "id": "809b32b2-65fb-4fb8-bab8-585d5f3a15ba",
+      "name": "Slack Alert",
+      "webhookId": "780fb282-565a-4aab-9ccb-482b6c950088",
+      "credentials": {
+        "slackApi": {
+          "id": "byARsQ9bzGzdnI1g",
+          "name": "Slack API"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        -240
+      ],
+      "id": "25830fba-9b28-4902-83d2-b9a235653ac9",
+      "name": "Discard Spam"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"success\",\n  \"message\": \"Ticket received and being processed\"\n}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1568,
+        -96
+      ],
+      "id": "a12fddb9-f325-49d8-a90d-2eb06393eb0c",
+      "name": "Return 202 Accepted"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"error\",\n  \"message\": \"Internal server error\"\n}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1792,
+        320
+      ],
+      "id": "e14fbc9b-184f-4ad2-b9c0-9e03110553f4",
+      "name": "Return 500 Error"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#errors",
+          "mode": "name"
+        },
+        "text": "=🔴 *Workflow Error — ai-ticket-triage*\n\n*Error:* {{ $json.error.message || $json.error }}\n*Type:* {{ $json.error.name || 'WorkflowError' }}\n*Time:* {{ new Date().toISOString() }}\n*Execution:* http://localhost:5678/workflow/{{ $workflow.id }}/executions/{{ $execution.id }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1568,
+        320
+      ],
+      "id": "d93b0c4b-4dc0-4ab0-9aa5-b14345f05df3",
+      "name": "Slack Error",
+      "webhookId": "780fb282-565a-4aab-9ccb-482b6c950088",
+      "credentials": {
+        "slackApi": {
+          "id": "byARsQ9bzGzdnI1g",
+          "name": "Slack API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"error\",\n  \"message\": \"Invalid request\"\n}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        448,
+        464
+      ],
+      "id": "512be114-c658-495d-be92-3702236f995c",
+      "name": "Return 400 Error"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Input Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Guardrail": {
+      "main": [
+        [
+          {
+            "node": "Classify Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return 400 Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Guardrail": {
+      "main": [
+        [
+          {
+            "node": "Eval Log",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Discard Spam",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ticket Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eval Log": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ticket Log": {
+      "main": [
+        [
+          {
+            "node": "Return 202 Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Ticket": {
+      "main": [
+        [
+          {
+            "node": "Output Guardrail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Return 202 Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discard Spam": {
+      "main": [
+        [
+          {
+            "node": "Return 202 Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Error": {
+      "main": [
+        [
+          {
+            "node": "Return 500 Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "1f8b0c2f-a223-4d09-9db2-82846610876d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b2dc1f499b777a93c3124ff45d33c9fedcfb2102936df105a2689be947cd5973"
+  },
+  "id": "waVdwch18ohNxDTk",
+  "tags": []
+}

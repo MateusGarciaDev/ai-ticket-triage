@@ -23,6 +23,7 @@ Built as a portfolio project to demonstrate AI-powered automation architecture i
 - [Testing the webhook](#testing-the-webhook)
 - [Known limitations](#known-limitations)
 - [Roadmap](#roadmap)
+- [License](#license)
 
 ---
 
@@ -317,4 +318,4 @@ These are known trade-offs in the current implementation, documented for transpa
 
 ## License
 
-MIT
+[MIT](LICENSE)
